@@ -63,6 +63,7 @@ def prepare_for_evaluation(
     traj_path: str,
     original_data_path: str,
     output_path: str,
+    max_samples: int = None,
 ):
     """
     Extract SQL from trajectories and merge with original data for evaluation.
@@ -90,6 +91,9 @@ def prepare_for_evaluation(
         for line in f:
             if line.strip():
                 original_data.append(json.loads(line))
+
+    if max_samples is not None:
+        original_data = original_data[:max_samples]
 
     print(f"  {len(traj_dict)} trajectories, {len(original_data)} original instances")
 
@@ -125,12 +129,14 @@ def main():
     parser.add_argument('--trajectory', type=str, required=True, help='Trajectory JSONL file')
     parser.add_argument('--original-data', type=str, required=True, help='Original input JSONL (with test_cases)')
     parser.add_argument('--output', type=str, required=True, help='Output JSONL for evaluation pipeline')
+    parser.add_argument('--limit', type=int, default=None, help='Limit evaluation samples')
     args = parser.parse_args()
 
     prepare_for_evaluation(
         traj_path=args.trajectory,
         original_data_path=args.original_data,
         output_path=args.output,
+        max_samples=args.limit,
     )
 
 

@@ -23,6 +23,8 @@ def run_inference(
     max_model_len: int = 20000,
     max_tokens: int = 3000,
     temperature: float = 0.0,
+    gpu_memory_utilization: float = 0.7,
+    enforce_eager: bool = False,
 ):
     os.environ["CUDA_VISIBLE_DEVICES"] = gpu
     gpu_count = len(gpu.split(","))
@@ -34,6 +36,8 @@ def run_inference(
         model=model_path,
         tensor_parallel_size=gpu_count,
         max_model_len=max_model_len,
+        gpu_memory_utilization=gpu_memory_utilization,
+        enforce_eager=enforce_eager,
         trust_remote_code=True,
     )
     tokenizer = llm.get_tokenizer()
@@ -121,6 +125,17 @@ def main():
     parser.add_argument("--max_model_len", type=int, default=20000, help="Max model context length")
     parser.add_argument("--max_tokens", type=int, default=3000, help="Max generation tokens")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
+    parser.add_argument(
+        "--gpu_memory_utilization",
+        type=float,
+        default=0.7,
+        help="Fraction of each visible GPU reserved by vLLM",
+    )
+    parser.add_argument(
+        "--enforce_eager",
+        action="store_true",
+        help="Disable CUDA graphs for lower startup memory and easier debugging",
+    )
     args = parser.parse_args()
 
     run_inference(
@@ -132,6 +147,8 @@ def main():
         max_model_len=args.max_model_len,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        enforce_eager=args.enforce_eager,
     )
 
 

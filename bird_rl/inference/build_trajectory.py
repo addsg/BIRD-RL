@@ -120,7 +120,11 @@ def build_trajectory(
             "thought": format_thought(thought),
             "action": format_action(pred_sqls, tool_name or "execute_sql", submit_format),
             "end_flag": end_flag,
+            "tool_name": tool_name,
+            "exec_flag": exec_flag,
         }
+        if obs.get("error_type"):
+            turn_data["error_type"] = obs["error_type"]
 
         # Add observation only if not end (submit_solution doesn't need observation)
         if not end_flag:

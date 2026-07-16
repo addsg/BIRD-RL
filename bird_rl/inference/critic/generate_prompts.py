@@ -15,6 +15,8 @@ import os
 import argparse
 from pathlib import Path
 
+from bird_rl.inference.critic_session import session_database_path
+
 from bird_rl.prompts.sft_generation import SFT_TRAINING_SYSTEM_PROMPT, SFT_TRAINING_USER_TEMPLATE
 
 
@@ -84,6 +86,7 @@ def process_dataset(
     current_turn: int,
     max_samples: int = None,
     max_turns: int = 5,
+    session_dir: str = None,
 ):
     """
     Process critic dataset and generate turn prompts.
@@ -158,16 +161,20 @@ def process_dataset(
             already_finished += 1
             continue
 
-        # Get schema
-        if db_id not in schema_cache:
-            db_path = os.path.join(db_dir, db_id, f"{db_id}.sqlite")
+        # Get the schema after preprocess_sql has been applied.
+        schema_key = instance_idx if session_dir else db_id
+        if schema_key not in schema_cache:
+            if session_dir:
+                db_path = str(session_database_path(session_dir, instance_idx))
+            else:
+                db_path = os.path.join(db_dir, db_id, f"{db_id}.sqlite")
             if os.path.exists(db_path):
-                schema_cache[db_id] = get_schema_from_db(db_path)
+                schema_cache[schema_key] = get_schema_from_db(db_path)
             else:
                 print(f"  WARNING: Database not found: {db_path}")
-                schema_cache[db_id] = "(Database not found)"
+                schema_cache[schema_key] = "(Database not found)"
 
-        schema = schema_cache[db_id]
+        schema = schema_cache[schema_key]
 
         # Use schema from data if available and DB schema is empty
         if not schema or schema == "(Database not found)":
@@ -227,6 +234,8 @@ def main():
     parser.add_argument('--traj-dir', type=str, required=True, help='Trajectory directory')
     parser.add_argument('--output', type=str, required=True, help='Output JSONL file')
     parser.add_argument('--limit', type=int, default=None, help='Limit number of samples')
+    parser.add_argument('--session-dir', type=str, default=None,
+                        help='Directory containing per-trajectory SQLite databases')
     args = parser.parse_args()
 
     process_dataset(
@@ -237,6 +246,7 @@ def main():
         current_turn=args.turn,
         max_samples=args.limit,
         max_turns=args.max_turns,
+        session_dir=args.session_dir,
     )
 
 
