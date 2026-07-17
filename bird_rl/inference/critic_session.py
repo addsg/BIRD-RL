@@ -14,6 +14,13 @@ _TEMP_OBJECT_RE = re.compile(
     r"(TABLE|VIEW|INDEX|TRIGGER)\b",
     flags=re.IGNORECASE,
 )
+_TEMP_TABLE_NAME_RE = re.compile(
+    r"^\s*CREATE\s+(?:TEMP|TEMPORARY)\s+TABLE\s+"
+    r"(?:IF\s+NOT\s+EXISTS\s+)?"
+    r'(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|([^\s(]+))',
+    flags=re.IGNORECASE,
+)
+_SHADOW_PREFIX = "__critic_base_"
 
 
 def session_database_path(session_dir: str, instance_idx: int) -> Path:
@@ -40,6 +47,47 @@ def materialize_temporary_object(sql: str) -> tuple[str, bool]:
     """Convert CREATE TEMP objects to persistent objects in an isolated DB."""
     rewritten, count = _TEMP_OBJECT_RE.subn(r"\1\3 ", sql, count=1)
     return rewritten, bool(count)
+
+
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _shadow_main_table(conn: sqlite3.Connection, preprocess_sql: str) -> bool:
+    """Move aside a main table that the original TEMP table would shadow."""
+    match = _TEMP_TABLE_NAME_RE.match(preprocess_sql)
+    if not match:
+        return False
+
+    table_name = next(group for group in match.groups() if group is not None)
+    existing = conn.execute(
+        "SELECT type FROM sqlite_master WHERE lower(name) = lower(?)",
+        (table_name,),
+    ).fetchone()
+    if existing is None:
+        return False
+    if existing[0] != "table":
+        raise ValueError(
+            f"Cannot materialize TEMP TABLE {table_name!r}: "
+            f"a main {existing[0]} has the same name"
+        )
+
+    suffix = 0
+    while True:
+        hidden_name = f"{_SHADOW_PREFIX}{table_name}_{suffix}"
+        collision = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE lower(name) = lower(?)",
+            (hidden_name,),
+        ).fetchone()
+        if collision is None:
+            break
+        suffix += 1
+
+    conn.execute(
+        f"ALTER TABLE {_quote_identifier(table_name)} "
+        f"RENAME TO {_quote_identifier(hidden_name)}"
+    )
+    return True
 
 
 def initialize_sessions(
@@ -81,18 +129,24 @@ def initialize_sessions(
 
                 preprocess_sql = sample.get("preprocess_sql") or []
                 materialized_count = 0
+                shadowed_count = 0
+                preprocess_error = None
+                statement = None
                 conn = sqlite3.connect(target_db)
                 try:
                     for statement in preprocess_sql:
+                        shadowed_count += int(_shadow_main_table(conn, str(statement)))
                         prepared_sql, materialized = materialize_temporary_object(
                             str(statement)
                         )
                         materialized_count += int(materialized)
                         conn.execute(prepared_sql)
                     conn.commit()
-                except Exception:
+                except Exception as exc:
                     conn.rollback()
-                    raise
+                    preprocess_error = (
+                        f"{type(exc).__name__}: {exc}; statement={statement!r}"
+                    )
                 finally:
                     conn.close()
 
@@ -104,6 +158,9 @@ def initialize_sessions(
                         "database_path": str(target_db),
                         "preprocess_statements": len(preprocess_sql),
                         "materialized_temp_objects": materialized_count,
+                        "shadowed_main_tables": shadowed_count,
+                        "preprocess_success": preprocess_error is None,
+                        "preprocess_error": preprocess_error,
                     }
                 )
 
@@ -149,10 +206,19 @@ def main() -> None:
             force=args.force,
         )
         preprocess_count = sum(r["preprocess_statements"] for r in records)
+        shadowed_count = sum(r["shadowed_main_tables"] for r in records)
+        failed_records = [r for r in records if not r["preprocess_success"]]
         print(
             f"Initialized {len(records)} trajectory databases; "
-            f"executed {preprocess_count} preprocess statements"
+            f"executed {preprocess_count} preprocess statements; "
+            f"shadowed {shadowed_count} main tables; "
+            f"{len(failed_records)} preprocess failures"
         )
+        for record in failed_records:
+            print(
+                f"WARNING: {record['instance_id']} preprocess failed: "
+                f"{record['preprocess_error']}"
+            )
     else:
         cleanup_sessions(args.session_dir)
         print(f"Cleaned trajectory databases: {args.session_dir}")

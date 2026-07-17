@@ -26,7 +26,11 @@ def get_schema_from_db(db_path: str, num_sample_rows: int = 3) -> str:
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name")
+        cursor.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type='table' AND name NOT LIKE '__critic_base_%' "
+            "ORDER BY name"
+        )
         tables = cursor.fetchall()
 
         for table_name, create_sql in tables:
